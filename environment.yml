@@ -26,4 +26,4 @@ dependencies:
     - flash-attn 
     # - accelerate
     - matplotlib
-    - highlight-text
+    - pyarrow

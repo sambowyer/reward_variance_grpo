@@ -1,3 +1,17 @@
+# Generated files
+
+*.o
+*.parquet
+*.json
+
+# Wandb
+wandb/
+
+# Logs
+logs/
+
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

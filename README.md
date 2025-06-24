@@ -42,15 +42,13 @@ after the regular env setup.
 
 ## Part 1: Initial Rollout Generation
 
-The script `generate_rollouts.py` generates a ton of rollouts using a model on a task and saves them to a directory named `rollout_dump/model_name/task_name/`.
+The script `generate_paired_rollouts.py` generates a ton of rollouts using a model on a task and saves them to a directory named `rollout_dump/task_name/model_name/`.
 
 ```bash
-python generate_rollouts.py \
+python generate_paired_rollouts.py \
     --model_name <model_name> \
     --task_name <task_name> \
-    --group_size <group_size> \
-    --num_groups <num_groups> \
-    --output_dir <output_dir>
+    --group_size <group_size>
 ```
 
 Since we're planning to use these completions for training the importance network, we need to store the completions and rewards in a format that's easy to load and use, so we'll use a `rollouts_{args}.parquet` file with columns:
@@ -62,17 +60,23 @@ Since we're planning to use these completions for training the importance networ
 - `split_token_idx` (the index of the token at which the rollout and its sister rollout were split)
 - `completion_text`
 - `reward`
-- `group_mean_reward`
-- `group_reward_variance`
+- `reward_group_mean`
+- `reward_group_var`
 - `partial_reward_1`
 - `partial_reward_2`
+- `partial_reward_1_group_mean`
+- `partial_reward_1_group_var`
+- `partial_reward_2_group_mean`
+- `partial_reward_2_group_var`
 - &c.
 
 (N.B. there's redundancy here across rows but that'll make it easier to lead the data later on when training the importance network.)
 
-The `{args}` in `rollouts_{args}.parquet` are the arguments passed to `generate_rollouts.py`, or could actually just be the group size, really.
+The list of partial rewards are saved in `rewards.py` as a dictionary of reward functions.
 
-The script `generate_rollouts.py` will also save a `rollouts_metadata.json` file with the arguments passed to the script plus runtime, date stats &c.
+The `{args}` in `rollouts_{args}.parquet` are the arguments passed to `generate_paired_rollouts.py`, or could actually just be the group size, really.
+
+The script `generate_paired_rollouts.py` will also save a `rollouts_metadata.json` file with the arguments passed to the script plus runtime, date stats &c.
 
 ## Part 2: Training the Importance Network
 
