@@ -44,7 +44,7 @@ def main():
         model=args.model_name,
         enable_prefix_caching=True,
         dtype=torch.bfloat16,
-        enforce_eager=True,
+        # enforce_eager=True,
     )
 
     # Set up tokenizer
@@ -168,7 +168,7 @@ def main():
 
             # Truncate the even-numbered rollouts to create pairing
             # First, sample split_idx for each even-numbered rollout uniformly from [0, len(even_rollout_i))
-            split_idxs = np.random.randint(low=0, high=[len(r.text) for r in even_rollouts[0].outputs])
+            split_idxs = np.random.randint(low=1, high=[len(r.text)-1 for r in even_rollouts[0].outputs])
 
             # Then, truncate the even-numbered rollouts at the corresponding split_idx
             truncated_even_rollouts_text = [r.text[:split_idxs[i]] for i, r in enumerate(even_rollouts[0].outputs)]
@@ -177,7 +177,7 @@ def main():
 
             # Now, generate the odd-numbered rollouts
             odd_rollouts = model.generate(
-                prompts=truncated_even_rollouts_text, # len(truncated_even_rollouts_text) == args.group_size//2 ?
+                prompts=[prompt_text + r for r in truncated_even_rollouts_text],
                 sampling_params=SamplingParams(
                     max_tokens=args.max_tokens,
                     temperature=args.temperature,
