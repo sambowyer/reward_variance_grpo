@@ -8,7 +8,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen3-0.6B")
     parser.add_argument("--task_name", type=str, default="gsm8k")
-    parser.add_argument("--group_size", type=int, default=10)
+    parser.add_argument("--file_number", type=int, default=None)
+    parser.add_argument("--group_size", type=int, default=16)
     parser.add_argument("--num_prompts", type=int, default=2)
     parser.add_argument("--num_pairs", type=int, default=3)
     parser.add_argument("--debug", action="store_true", default=False)
@@ -17,12 +18,20 @@ def main():
     # Find the matching parquet file
     model_short = args.model_name.split("/")[-1]
     parquet_dir = os.path.join("rollout_dump", args.task_name, model_short)
-    pattern = os.path.join(parquet_dir, f"rollouts_{args.group_size}_*.parquet")
-    parquet_files = sorted(glob.glob(pattern))
-    if not parquet_files:
-        print(f"No matching parquet files found in {parquet_dir} for group_size {args.group_size}.")
-        return
-    parquet_file = parquet_files[0]  # Pick the first matching file
+    if args.file_number is None:
+        pattern = os.path.join(parquet_dir, f"rollouts_{args.group_size}_*.parquet")
+        parquet_files = sorted(glob.glob(pattern))
+        if not parquet_files:
+            print(f"No matching parquet files found in {parquet_dir} for group_size {args.group_size}.")
+            return
+        parquet_file = parquet_files[0]  # Pick the first matching file
+    else:
+        parquet_file = os.path.join(parquet_dir, f"rollouts_{args.group_size}_{args.file_number}.parquet")
+        if not os.path.exists(parquet_file):
+            print(f"Parquet file {parquet_file} does not exist.")
+            return
+    
+    print(f"Loading parquet file {parquet_file}...\n")
 
     data = pd.read_parquet(parquet_file)
 

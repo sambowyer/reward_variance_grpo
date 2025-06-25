@@ -46,12 +46,18 @@ The script `generate_paired_rollouts.py` generates a ton of rollouts using a mod
 
 ```bash
 python generate_paired_rollouts.py \
-    --model_name <model_name> \
+    --model_name <model_name> \ 
     --task_name <task_name> \
-    --group_size <group_size>
+    --group_size <group_size> \
+    --num_epochs <num_epochs> \ 
+    --output_dir <output_dir> \
+    --overwrite \
+    --max_tokens <max_tokens> \ # per rollout
+    --temperature <temperature> \ # sampling temp
+    --eager \ # VLLM eager mode (default: False)
 ```
 
-Since we're planning to use these completions for training the importance network, we need to store the completions and rewards in a format that's easy to load and use, so we'll use a `rollouts_{args}.parquet` file with columns:
+Since we're planning to use these completions for training the importance network, we need to store the completions and rewards in a format that's easy to load and use, so we'll use a `rollouts_{group_size}_{file_number}.parquet` file with columns:
 
 - `prompt_id`
 - `prompt_text`
@@ -79,11 +85,11 @@ Since we're planning to use these completions for training the importance networ
 
 The list of partial rewards are saved in `rewards.py` as a dictionary of reward functions.
 
-The `{args}` in `rollouts_{args}.parquet` are the arguments passed to `generate_paired_rollouts.py`, or could actually just be the group size, really.
+The `{file_number}` in `rollouts_{group_size}_{file_number}.parquet` is incremented for each new file saved.
 
 Note that when training the importance network, we only need the `completion_stub`, `reward_A`, `reward_B`, `reward_group_mean` and `reward_group_var` columns (and the `split_token_idx` will be nice, but could be computed from the `completion_stub`).
 
-The script `generate_paired_rollouts.py` will also save a `rollouts_metadata.json` file with the arguments passed to the script plus runtime, date stats &c.
+The script `generate_paired_rollouts.py` will also save a `rollouts_metadata.json` file with the arguments passed to the script plus `num_epochs` (i.e. the number of epochs completed), `max_group_id` and `file_count`.
 
 ## Part 2: Training the Importance Network
 

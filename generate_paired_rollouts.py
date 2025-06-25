@@ -36,54 +36,62 @@ def main():
     parser.add_argument("--group_size", type=int,  default=16)
     parser.add_argument("--num_epochs", type=int, default=1)
     parser.add_argument("--output_dir", type=str, default="rollout_dump")
+    parser.add_argument("--overwrite", action="store_true", default=False)
     parser.add_argument("--max_tokens", type=int, default=1024)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--eager", action="store_true", default=False)
     args = parser.parse_args()
 
     print(f"Args: {args}\n")
-    
 
+    assert args.group_size % 2 == 0, "Group size must be even"
+    
+    # Set up some constants
     MODEL_NAME_SHORT = args.model_name.split("/")[-1]
     NUM_PAIRS = args.group_size // 2
 
-
-    # Load model with VLLM
-    model = LLM(
-        model=args.model_name,
-        enable_prefix_caching=True,
-        dtype=torch.bfloat16,
-        enforce_eager=args.eager,
-    )
-
-    # Set up tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    EOS_TOKEN_ID = tokenizer.eos_token_id
-    EOS_TOKEN = tokenizer.convert_ids_to_tokens(EOS_TOKEN_ID)
-
-    # Load task -- ONLY TRAINING DATA
-    dataset_config = get_dataset_config(args.task_name)
-    dataset = load_dataset(dataset_config["hf_path"], split=dataset_config["split"], name=dataset_config["config_name"])
-    dataset = dataset.map(dataset_config["preprocess_fnc"], fn_kwargs={"tokenizer": tokenizer})
-
-    # Create output directory
+    # Create output directory (if it doesn't exist already)
     output_dir = Path(args.output_dir) / args.task_name / MODEL_NAME_SHORT
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create a metadata file
+    # Create a metadata file (if it doesn't exist already)
     metadata_path = output_dir / f"rollouts_{args.group_size}_metadata.json"
-    metadata = {
+    base_metadata = {
         "model_name": args.model_name,
         "task_name": args.task_name,
         "group_size": args.group_size,
-        "num_epochs": args.num_epochs,
+        "num_epochs": 0, # will be incremented by 1 for each completed epoch
         "max_tokens": args.max_tokens,
         "temperature": args.temperature,
         "max_group_id": -1, # will be incremented by 1 for each new group
+        "file_count": 0, # will be incremented by 1 for each new file saved
     }
-    if not os.path.exists(metadata_path):
+
+    # Initialize the metadata file
+    if not os.path.exists(metadata_path) or args.overwrite:
         with open(metadata_path, "w") as f:
-            json.dump(metadata, f)
+            json.dump(base_metadata, f, indent=4)
+        
+        metadata = base_metadata
+    else:
+        # If the metadata file already exists, load it and check our args against it
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+
+        for k, v in base_metadata.items():
+            if k in ("max_group_id", "file_count", "num_epochs"):
+                continue # these are not experiment-specific metadata
+
+            # If the metadata file already exists and the args are different, raise an error
+            if k not in metadata or metadata[k] != v:
+                raise ValueError(f"Metadata file {metadata_path} already exists and has different values for {k} ({metadata[k]}) than the current args ({v}). To overwrite, use --overwrite.")
+
+
+    # Set current group_id to the max_group_id (it will be incremented by 1 for each new group)
+    group_id = metadata["max_group_id"]
+
+    # Set file_count to the file_count in the metadata
+    file_count = metadata["file_count"]
 
     # Load partial reward names for the task
     partial_reward_names = TASK2PARTIAL_REWARD_NAMES[args.task_name]
@@ -107,26 +115,6 @@ def main():
         *[pa.field(f"{reward_name}_group_mean", pa.float64()) for reward_name in partial_reward_names],
         *[pa.field(f"{reward_name}_group_var", pa.float64()) for reward_name in partial_reward_names],
     ])
-
-    # Initialize the parquet file
-    output_file = output_dir / f"rollouts_{args.group_size}.parquet"
-
-    # Write the initial (empty) file with the defined schema
-    if not os.path.exists(output_file):
-        initial_df = pd.DataFrame(columns=schema.names)
-        table = pa.Table.from_pandas(initial_df, schema=schema)
-        pq.write_table(table, output_file)
-        print(f"Initialized empty Parquet file: {output_file}")
-
-    else:
-        print(f"Parquet file already exists: {output_file}")
-
-        # Load the existing metadata
-        with open(metadata_path, "r") as f:
-            metadata = json.load(f)
-
-    # Set current group_id to the max_group_id
-    group_id = metadata["max_group_id"]
 
     # Set up wandb
     wandb.init(
@@ -152,6 +140,24 @@ def main():
 
     # Create a new table to store the rollouts
     new_rollouts = {k: [] for k in schema.names}
+
+    # Load model with VLLM
+    model = LLM(
+        model=args.model_name,
+        enable_prefix_caching=True,
+        dtype=torch.bfloat16,
+        enforce_eager=args.eager,
+    )
+
+    # Set up tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    EOS_TOKEN_ID = tokenizer.eos_token_id
+    EOS_TOKEN = tokenizer.convert_ids_to_tokens(EOS_TOKEN_ID)
+
+    # Load task -- ONLY TRAINING DATA
+    dataset_config = get_dataset_config(args.task_name)
+    dataset = load_dataset(dataset_config["hf_path"], split=dataset_config["split"], name=dataset_config["config_name"])
+    dataset = dataset.map(dataset_config["preprocess_fnc"], fn_kwargs={"tokenizer": tokenizer})
 
     # Now we're ready to generate the rollouts
     for epoch in range(args.num_epochs):
@@ -263,22 +269,28 @@ def main():
 
             # Append the new rollouts to the parquet file if it's getting big
             if len(new_rollouts["prompt_id"]) > 50_000:
-                dump_rollouts_to_parquet(pd.DataFrame(new_rollouts), output_file, schema)
+                dump_rollouts_to_parquet(pd.DataFrame(new_rollouts), output_dir / f"rollouts_{args.group_size}_{file_count}.parquet", schema)
                 new_rollouts = {k: [] for k in schema.names}
+                file_count += 1
 
+                # Update the metadata
                 metadata["max_group_id"] = group_id
+                metadata["file_count"] = file_count
                 with open(metadata_path, "w") as f:
-                    json.dump(metadata, f)
+                    json.dump(metadata, f, indent=4)
 
-            # if i > 0:
+            # if i > 3:
             #     break
 
+        # Increment the number of epochs completed
+        metadata["num_epochs"] += 1
+
     # Dump the remaining rollouts
-    dump_rollouts_to_parquet(pd.DataFrame(new_rollouts), output_file, schema)
+    dump_rollouts_to_parquet(pd.DataFrame(new_rollouts), output_dir / f"rollouts_{args.group_size}_{file_count}.parquet", schema)
 
     # Save metadata
     with open(metadata_path, "w") as f:
-        json.dump(metadata, f)
+        json.dump(metadata, f, indent=4)
 
     # Close wandb
     wandb.finish()
@@ -299,9 +311,6 @@ def dump_rollouts_to_parquet(rollouts_df, output_file, schema):
         return
     
     new_rollouts_table = pa.Table.from_pandas(rollouts_df, schema=schema)
-
-    # add max_group_id to the filename
-    output_file = output_file.with_name(f"{output_file.stem}_{rollouts_df['group_id'].max()}.parquet")
 
     with pq.ParquetWriter(output_file, schema=schema, compression='snappy') as writer:
         writer.write_table(new_rollouts_table)
