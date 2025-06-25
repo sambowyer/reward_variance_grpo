@@ -72,7 +72,7 @@ def main():
         with open(metadata_path, "w") as f:
             json.dump(base_metadata, f, indent=4)
         
-        metadata = base_metadata
+        metadata = {**base_metadata}
     else:
         # If the metadata file already exists, load it and check our args against it
         with open(metadata_path, "r") as f:
@@ -157,6 +157,8 @@ def main():
     # Load task -- ONLY TRAINING DATA
     dataset_config = get_dataset_config(args.task_name)
     dataset = load_dataset(dataset_config["hf_path"], split=dataset_config["split"], name=dataset_config["config_name"])
+    if dataset_config["num_rows"] is not None:
+        dataset = dataset.select(range(dataset_config["num_rows"]))
     dataset = dataset.map(dataset_config["preprocess_fnc"], fn_kwargs={"tokenizer": tokenizer})
 
     # Now we're ready to generate the rollouts
@@ -287,8 +289,11 @@ def main():
 
     # Dump the remaining rollouts
     dump_rollouts_to_parquet(pd.DataFrame(new_rollouts), output_dir / f"rollouts_{args.group_size}_{file_count}.parquet", schema)
+    file_count += 1
 
     # Save metadata
+    metadata["max_group_id"] = group_id
+    metadata["file_count"] = file_count
     with open(metadata_path, "w") as f:
         json.dump(metadata, f, indent=4)
 

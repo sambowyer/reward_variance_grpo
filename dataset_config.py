@@ -100,9 +100,11 @@ def preprocess_gsm8k(example : Dict[str, Any], tokenizer: AutoTokenizer) -> Dict
 DATASET_CONFIGS = {
     "countdown": {
         "hf_path": "Jiayi-Pan/Countdown-Tasks-3to4",
+        "config_name": "default",
         "split": "train",
         "short_name": "cd",
         "preprocess_fnc": preprocess_countdown,
+        "num_rows": 10_000, # use first 10k rows
     },
     "gsm8k": {
         "hf_path": "gsm8k",
@@ -110,6 +112,7 @@ DATASET_CONFIGS = {
         "split": "train",
         "short_name": "gsm",
         "preprocess_fnc": preprocess_gsm8k,
+        "num_rows": None, # use all rows
     },
 }
 
