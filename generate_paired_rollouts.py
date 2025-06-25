@@ -166,14 +166,17 @@ def main():
                 ),
             )
 
-            # Truncate the even-numbered rollouts to create pairing
-            # First, sample split_idx for each even-numbered rollout uniformly from [0, len(even_rollout_i))
-            split_idxs = np.random.randint(low=1, high=[max(len(r.text)-1, 2) for r in even_rollouts[0].outputs])
-
-            # Then, truncate the even-numbered rollouts at the corresponding split_idx
-            truncated_even_rollouts_text = [r.text[:split_idxs[i]] for i, r in enumerate(even_rollouts[0].outputs)]
-
             assert len(even_rollouts[0].outputs) == args.group_size//2, "Number of even-numbered rollouts is not equal to group_size/2"
+
+            # Truncate the even-numbered rollouts to create pairing
+            # First, sample split_idx for each even-numbered rollout uniformly from [0, len(even_rollout_tokens_i)-1)
+            split_idxs = np.random.randint(low=0, high=[max(len(r.token_ids)-1, 1) for r in even_rollouts[0].outputs])
+
+            # Then, truncate the even-numbered rollouts at the corresponding split_idx (IN TOKEN-SPACE)
+            truncated_even_rollouts_token_ids = [r.token_ids[:split_idxs[i]] for i, r in enumerate(even_rollouts[0].outputs)]
+
+            # Convert the token_ids back to text for vllm
+            truncated_even_rollouts_text = [tokenizer.decode(r) for r in truncated_even_rollouts_token_ids]
 
             # Now, generate the odd-numbered rollouts
             odd_rollouts = model.generate(
@@ -190,7 +193,7 @@ def main():
             
             # Get the completion text -- TODO: check if this is correct
             even_rollouts_text = [r.text for r in even_rollouts[0].outputs]
-            odd_rollouts_text = [r.outputs[0].text for r in odd_rollouts]
+            odd_rollouts_text = [truncated_even_rollouts_text[i] + r.outputs[0].text for i, r in enumerate(odd_rollouts)]
 
             # Finally, interleave the even and odd-numbered rollouts
             paired_rollouts = [r for pair in zip(even_rollouts_text, odd_rollouts_text) for r in pair]
