@@ -56,25 +56,32 @@ Since we're planning to use these completions for training the importance networ
 - `prompt_id`
 - `prompt_text`
 - `group_id` (a single prompt may be called on multiple times to generate different groups of rollouts)
-- `completion_id` (i.e. 1 up to $G$)
+- `completion_pair_id` (i.e. 1 up to $G/2$)
 - `split_token_idx` (the index of the token at which the rollout and its sister rollout were split)
-- `completion_text`
-- `reward`
+- `completion_stub` (the completion text up to the split token)
+- `completion_text_A`
+- `completion_text_B`
+- `reward_A`
+- `reward_B`
 - `reward_group_mean`
 - `reward_group_var`
-- `partial_reward_1`
-- `partial_reward_2`
+- `partial_reward_1_A`
+- `partial_reward_1_B`
 - `partial_reward_1_group_mean`
 - `partial_reward_1_group_var`
+- `partial_reward_2_A`
+- `partial_reward_2_B`
 - `partial_reward_2_group_mean`
 - `partial_reward_2_group_var`
-- &c.
+- &c. for each partial reward function.
 
 (N.B. there's redundancy here across rows but that'll make it easier to lead the data later on when training the importance network.)
 
 The list of partial rewards are saved in `rewards.py` as a dictionary of reward functions.
 
 The `{args}` in `rollouts_{args}.parquet` are the arguments passed to `generate_paired_rollouts.py`, or could actually just be the group size, really.
+
+Note that when training the importance network, we only need the `completion_stub`, `reward_A`, `reward_B`, `reward_group_mean` and `reward_group_var` columns (and the `split_token_idx` will be nice, but could be computed from the `completion_stub`).
 
 The script `generate_paired_rollouts.py` will also save a `rollouts_metadata.json` file with the arguments passed to the script plus runtime, date stats &c.
 

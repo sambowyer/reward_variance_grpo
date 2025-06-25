@@ -25,6 +25,10 @@ from dataset_config import get_dataset_config
 
 
 def main():
+    start_time = time.time()
+    start_time_str = time.strftime("%Y-%m-%d_%H:%M:%S", time.localtime(start_time))
+    print(f"Start time: {start_time_str}")
+
     # Parse args
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-0.6B")
@@ -34,9 +38,14 @@ def main():
     parser.add_argument("--output_dir", type=str, default="rollout_dump")
     parser.add_argument("--max_tokens", type=int, default=1024)
     parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--eager", action="store_true", default=False)
     args = parser.parse_args()
 
+    print(f"Args: {args}\n")
+    
+
     MODEL_NAME_SHORT = args.model_name.split("/")[-1]
+    NUM_PAIRS = args.group_size // 2
 
 
     # Load model with VLLM
@@ -44,7 +53,7 @@ def main():
         model=args.model_name,
         enable_prefix_caching=True,
         dtype=torch.bfloat16,
-        # enforce_eager=True,
+        enforce_eager=args.eager,
     )
 
     # Set up tokenizer
@@ -84,13 +93,17 @@ def main():
         pa.field('prompt_id', pa.int64()),
         pa.field('prompt_text', pa.string()),
         pa.field('group_id', pa.int64()),
-        pa.field('completion_id', pa.int64()),
+        pa.field('completion_pair_id', pa.int64()),
         pa.field('split_token_idx', pa.int64()),
-        pa.field('completion_text', pa.string()),
-        pa.field('reward', pa.float64()),
+        pa.field('completion_stub', pa.string()),
+        pa.field('completion_text_A', pa.string()),
+        pa.field('completion_text_B', pa.string()),
+        pa.field('reward_A', pa.float64()),
+        pa.field('reward_B', pa.float64()),
         pa.field('reward_group_mean', pa.float64()),
         pa.field('reward_group_var', pa.float64()),
-        *[pa.field(f"{reward_name}", pa.float64()) for reward_name in partial_reward_names],
+        *[pa.field(f"{reward_name}_A", pa.float64()) for reward_name in partial_reward_names],
+        *[pa.field(f"{reward_name}_B", pa.float64()) for reward_name in partial_reward_names],
         *[pa.field(f"{reward_name}_group_mean", pa.float64()) for reward_name in partial_reward_names],
         *[pa.field(f"{reward_name}_group_var", pa.float64()) for reward_name in partial_reward_names],
     ])
@@ -155,18 +168,18 @@ def main():
             # Increment the group_id
             group_id += 1
 
-            # Generate the even-numbered rollouts
+            # Generate the even-numbered rollouts (A)
             even_rollouts = model.generate(
                 prompts=[prompt_text],
                 sampling_params=SamplingParams(
                     max_tokens=args.max_tokens,
                     temperature=args.temperature,
-                    n=args.group_size//2,
+                    n=NUM_PAIRS,
                     stop_token_ids=[EOS_TOKEN_ID],
                 ),
             )
 
-            assert len(even_rollouts[0].outputs) == args.group_size//2, "Number of even-numbered rollouts is not equal to group_size/2"
+            assert len(even_rollouts[0].outputs) == NUM_PAIRS, "Number of even-numbered rollouts is not equal to group_size/2"
 
             # Truncate the even-numbered rollouts to create pairing
             # First, sample split_idx for each even-numbered rollout uniformly from [0, len(even_rollout_tokens_i)-1)
@@ -178,7 +191,7 @@ def main():
             # Convert the token_ids back to text for vllm
             truncated_even_rollouts_text = [tokenizer.decode(r) for r in truncated_even_rollouts_token_ids]
 
-            # Now, generate the odd-numbered rollouts
+            # Now, generate the odd-numbered rollouts (B)
             odd_rollouts = model.generate(
                 prompts=[prompt_text + r for r in truncated_even_rollouts_text],
                 sampling_params=SamplingParams(
@@ -213,19 +226,26 @@ def main():
             partial_rewards_var = {reward_name: np.var([r[reward_name] for r in partial_rewards]) for reward_name in partial_reward_names}
 
             # Update the new_rollouts
-            new_rollouts["prompt_id"].extend([prompt_id] * args.group_size)
-            new_rollouts["prompt_text"].extend([prompt_text] * args.group_size)
-            new_rollouts["group_id"].extend([group_id] * args.group_size)
-            new_rollouts["completion_id"].extend([i] * args.group_size)
-            new_rollouts["split_token_idx"].extend([idx_copy for idx in split_idxs for idx_copy in [idx, idx]])
-            new_rollouts["completion_text"].extend(paired_rollouts)
-            new_rollouts["reward"].extend(rewards)
-            new_rollouts["reward_group_mean"].extend([mean_reward] * args.group_size)
-            new_rollouts["reward_group_var"].extend([var_reward] * args.group_size)
+            new_rollouts["prompt_id"].extend([prompt_id] * NUM_PAIRS)
+            new_rollouts["prompt_text"].extend([prompt_text] * NUM_PAIRS)
+            new_rollouts["group_id"].extend([group_id] * NUM_PAIRS)
+            new_rollouts["completion_pair_id"].extend([i] * NUM_PAIRS)
+            new_rollouts["split_token_idx"].extend(split_idxs.tolist())
+
+            new_rollouts["completion_stub"].extend(truncated_even_rollouts_text)
+            new_rollouts["completion_text_A"].extend(even_rollouts_text)
+            new_rollouts["completion_text_B"].extend(odd_rollouts_text)
+
+            new_rollouts["reward_A"].extend(rewards[::2])
+            new_rollouts["reward_B"].extend(rewards[1::2])
+            new_rollouts["reward_group_mean"].extend([mean_reward] * NUM_PAIRS)
+            new_rollouts["reward_group_var"].extend([var_reward] * NUM_PAIRS)
             for reward_name in partial_reward_names:
-                new_rollouts[reward_name].extend([r[reward_name] for r in partial_rewards])
-                new_rollouts[f"{reward_name}_group_mean"].extend([partial_rewards_mean[reward_name]] * args.group_size)
-                new_rollouts[f"{reward_name}_group_var"].extend([partial_rewards_var[reward_name]] * args.group_size)
+                new_rollouts[f"{reward_name}_A"].extend([r[reward_name] for r in partial_rewards[::2]])
+                new_rollouts[f"{reward_name}_B"].extend([r[reward_name] for r in partial_rewards[1::2]])
+                new_rollouts[f"{reward_name}_group_mean"].extend([partial_rewards_mean[reward_name]] * NUM_PAIRS)
+                new_rollouts[f"{reward_name}_group_var"].extend([partial_rewards_var[reward_name]] * NUM_PAIRS)
+
 
             # Update the wandb stats
             wandb_stats["group_id"].append(group_id)
@@ -241,7 +261,7 @@ def main():
             # Log the wandb stats
             wandb.log({k: v[-1] for k, v in wandb_stats.items()})
 
-            # Append the new rollouts to the parquet file
+            # Append the new rollouts to the parquet file if it's getting big
             if len(new_rollouts["prompt_id"]) > 50_000:
                 dump_rollouts_to_parquet(pd.DataFrame(new_rollouts), output_file, schema)
                 new_rollouts = {k: [] for k in schema.names}
@@ -267,6 +287,11 @@ def main():
     # del rollouts_df
     # del new_rollouts_table
     # gc.collect()
+
+    end_time = time.time()
+    end_time_str = time.strftime("%Y-%m-%d_%H:%M:%S", time.localtime(end_time))
+    print(f"End time: {end_time_str}")
+    print(f"Total time: {end_time - start_time} seconds")
 
 
 def dump_rollouts_to_parquet(rollouts_df, output_file, schema):
