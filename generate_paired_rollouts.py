@@ -229,7 +229,7 @@ def main():
             new_rollouts["prompt_id"].extend([prompt_id] * NUM_PAIRS)
             new_rollouts["prompt_text"].extend([prompt_text] * NUM_PAIRS)
             new_rollouts["group_id"].extend([group_id] * NUM_PAIRS)
-            new_rollouts["completion_pair_id"].extend([i] * NUM_PAIRS)
+            new_rollouts["completion_pair_id"].extend(list(range(NUM_PAIRS)))
             new_rollouts["split_token_idx"].extend(split_idxs.tolist())
 
             new_rollouts["completion_stub"].extend(truncated_even_rollouts_text)
