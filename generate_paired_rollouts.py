@@ -168,7 +168,7 @@ def main():
 
             # Truncate the even-numbered rollouts to create pairing
             # First, sample split_idx for each even-numbered rollout uniformly from [0, len(even_rollout_i))
-            split_idxs = np.random.randint(low=1, high=[len(r.text)-1 for r in even_rollouts[0].outputs])
+            split_idxs = np.random.randint(low=1, high=[max(len(r.text)-1, 2) for r in even_rollouts[0].outputs])
 
             # Then, truncate the even-numbered rollouts at the corresponding split_idx
             truncated_even_rollouts_text = [r.text[:split_idxs[i]] for i, r in enumerate(even_rollouts[0].outputs)]
