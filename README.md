@@ -91,7 +91,27 @@ Note that when training the importance network, we only need the `completion_stu
 
 The script `generate_paired_rollouts.py` will also save a `rollouts_metadata.json` file with the arguments passed to the script plus `num_epochs` (i.e. the number of epochs completed), `max_group_id` and `file_count`.
 
+#### Exploring the rollouts
+
+The script `explore_paired_rollouts.py` can be used to explore the rollouts.
+
+```bash
+python explore_paired_rollouts.py \
+    --model_name <model_name> \
+    --task_name <task_name> \
+    --group_size <group_size> \
+    --file_number <file_number> 
+    --debug # finish with a breakpoint
+```
+
 ## Part 2: Training the Importance Network
 
-## Part 3: Applying the Soft-Mask
+- Load the rollouts from the parquet file as dataset.
+- Split the dataset into training and validation sets.
+- Train the importance network (just a head on an LLM)
+- Evaluate the importance network on the validation set.
+- Save the importance network.
+
+
+## Part 3: Applying the Soft-Mask in GRPO
 

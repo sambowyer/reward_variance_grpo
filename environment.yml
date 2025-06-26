@@ -21,6 +21,7 @@ dependencies:
     - deepspeed
     - transformers
     - datasets
+    - peft
     - wandb
     - vllm==0.7.3
     - flash-attn 

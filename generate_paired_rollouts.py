@@ -190,7 +190,7 @@ def main():
             assert len(even_rollouts[0].outputs) == NUM_PAIRS, "Number of even-numbered rollouts is not equal to group_size/2"
 
             # Truncate the even-numbered rollouts to create pairing
-            # First, sample split_idx for each even-numbered rollout uniformly from [0, len(even_rollout_tokens_i)-1)
+            # First, sample split_idx for each even-numbered rollout uniformly from [0, len(even_rollout_tokens_i)-1]
             split_idxs = np.random.randint(low=0, high=[max(len(r.token_ids)-1, 1) for r in even_rollouts[0].outputs])
 
             # Then, truncate the even-numbered rollouts at the corresponding split_idx (IN TOKEN-SPACE)
@@ -212,7 +212,7 @@ def main():
 
             # TODO: check finish reasons for rollouts
             
-            # Get the completion text -- TODO: check if this is correct
+            # Get the completion text
             even_rollouts_text = [r.text for r in even_rollouts[0].outputs]
             odd_rollouts_text = [truncated_even_rollouts_text[i] + r.outputs[0].text for i, r in enumerate(odd_rollouts)]
 
