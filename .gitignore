@@ -10,7 +10,11 @@ wandb/
 # Logs
 logs/
 
+# Plots
+plots/
 
+# Checkpoints
+importance_networks/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
