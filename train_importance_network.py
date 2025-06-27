@@ -17,7 +17,8 @@ from peft import get_peft_model, LoraConfig, TaskType
 # Regression Head
 # =====================
 class RegressionHead(nn.Module):
-    def __init__(self, hidden_size):
+    def __init__(self, hidden_size=768):
+        self.hidden_size = hidden_size
         super().__init__()
         self.linear = nn.Linear(hidden_size, 1)  # Predict scalar per token
 
@@ -34,6 +35,16 @@ class RegressionHead(nn.Module):
 
         return out
 
+    def load_weights(self, path):
+        linear_weights = torch.load(os.path.join(path, "linear.pt"))
+        self.linear.weight.data = linear_weights['weight'].to(self.linear.weight.device)
+        self.linear.bias.data = linear_weights['bias'].to(self.linear.bias.device)
+        return self
+
+    def save_pretrained(self, path):
+        os.makedirs(path, exist_ok=True)
+        torch.save(self.linear.state_dict(), os.path.join(path, "linear.pt"))
+
 class ImportanceModel(nn.Module):
     def __init__(self, base_model, regression_head):
         super().__init__()
@@ -44,6 +55,13 @@ class ImportanceModel(nn.Module):
         outputs = self.base_model(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
         hidden_states = outputs.hidden_states[-1]
         return self.regression_head(hidden_states, attention_mask)
+
+    @classmethod
+    def from_pretrained(cls, path):
+        base_model = AutoModelForCausalLM.from_pretrained(os.path.join(path, "base_model"))
+        regression_head = RegressionHead()
+        regression_head.load_weights(os.path.join(path, "regression_head"))
+        return cls(base_model, regression_head)
 
 # =====================
 # Dataset
@@ -162,9 +180,9 @@ def main():
     parser.add_argument('--rollout_model_name', type=str, default='Qwen/Qwen3-0.6B')
     parser.add_argument('--rollout_task_name', type=str, default='gsm8k')
     parser.add_argument('--output_dir', type=str, default='importance_networks')
-    parser.add_argument('--batch_size', type=int, default=4)
+    parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--num_epochs', type=int, default=1)
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--fine_progress_bar', action='store_true')
     parser.add_argument('--disable_wandb', action='store_true')
     parser.add_argument('--seed', type=int, default=42)
@@ -221,7 +239,7 @@ def main():
     optimizer = optim.AdamW(model.parameters(), lr=args.lr)
     
     # ========== wandb ==========
-    run_name = f"{args.base_model.split('/')[-1]}_{finetune_type_str}_{rollout_model_short}_{args.rollout_task_name}_G{args.group_size}"
+    run_name = f"base_{args.base_model.split('/')[-1]}_ft_{finetune_type_str}_roll_{rollout_model_short}_task_{args.rollout_task_name}_G{args.group_size}_lr{args.lr}"
     if not args.disable_wandb:
         wandb.init(entity="sam-bowyer-bristol", project="importance_networks", name=run_name)
 
@@ -271,7 +289,13 @@ def main():
                 hidden_states = outputs.hidden_states[-1]
                 pred = model.regression_head(hidden_states, attention_mask)
                 
-                f_theta = torch.stack([pred[i, idx-1] for i, idx in enumerate(batch['split_token_idx'])])
+                try:
+                    f_theta = torch.stack([pred[i, idx-1] for i, idx in enumerate(batch['split_token_idx'])])
+                except IndexError:
+                    # Can happen if len(completion_stub_tokens) != split_token_idx
+                    # (WHICH SHOULD NEVER HAPPEN (!?))
+                    # breakpoint()
+                    continue
                 
                 loss = nll_loss_pair(batch['reward_A'].to('cuda'), batch['reward_B'].to('cuda'), batch['reward_group_mean'].to('cuda'), batch['reward_group_var'].to('cuda'), f_theta).mean()
                 
@@ -285,11 +309,12 @@ def main():
         print(f"Epoch {epoch+1}: train_loss={train_loss:.4f}, val_loss={val_loss:.4f}")
 
     # ========== Save ==========
-    save_dir = os.path.join(args.output_dir, args.base_model.split('/')[-1], f"rollouts_{rollout_model_short}_{args.rollout_task_name}_{finetune_type_str}")
+    save_dir = os.path.join(args.output_dir, args.base_model.split('/')[-1], f"rollouts_{rollout_model_short}_{args.rollout_task_name}_{finetune_type_str}_G{args.group_size}_lr{args.lr}")
     os.makedirs(save_dir, exist_ok=True)
 
-    model.base_model.save_pretrained(save_dir)
-    torch.save(model.state_dict(), os.path.join(save_dir, 'importance_network.pt'))
+    model.base_model.save_pretrained(os.path.join(save_dir, "base_model"))
+    model.regression_head.save_pretrained(os.path.join(save_dir, "regression_head"))
+    # torch.save(model.state_dict(), os.path.join(save_dir, 'importance_network.pt'))
     
     if not args.disable_wandb:
         wandb.finish()
