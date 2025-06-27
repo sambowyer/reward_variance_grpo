@@ -106,12 +106,63 @@ python explore_paired_rollouts.py \
 
 ## Part 2: Training the Importance Network
 
-- Load the rollouts from the parquet file as dataset.
-- Split the dataset into training and validation sets.
-- Train the importance network (just a head on an LLM)
-- Evaluate the importance network on the validation set.
-- Save the importance network.
+Done in `train_importance_network.py`:
+
+```bash
+python train_importance_network.py \
+    --base_model <base_model> \
+    --finetune_type <finetune_type> \
+    --lora_rank <lora_rank> \
+    --group_size <group_size> \
+    --rollout_model_name <rollout_model_name> \
+    --rollout_task_name <rollout_task_name> \
+    --output_dir <output_dir> \
+    --batch_size <batch_size> \
+    --num_epochs <num_epochs> \
+    --lr <lr> \
+    --fine_progress_bar \
+    --disable_wandb \
+    --seed <seed> \
+```
+
+Saves the importance network to the `output_dir` directory with the name `base_{base_model}_ft_{finetune_type}_roll_{rollout_model_short}_task_{rollout_task_name}_G{group_size}_lr{lr}`.
+Inside the `output_dir` directory, there will be a `base_model` directory with the importance network weights, and a `base_model/regression_head` directory with the regression head weights.
+
+So to load the importance network, you can do:
+
+```python
+from train_importance_network import ImportanceModel
+
+importance_network_model = ImportanceModel.from_pretrained(os.path.join(output_dir, f"base_{base_model}_ft_{finetune_type}_roll_{rollout_model_short}_task_{rollout_task_name}_G{group_size}_lr{lr}"))
+```
+
+#### Plotting the importance per-token
+
+(I cannot for the life of me get the matplotlib version to work, so I've just got a coloured terminal version working for now.)
+The script `plot_importance_per_token.py` can be used to plot (not yet -- just prints to terminal) the importance per-token.
+
+```bash
+python plot_importance_per_token.py \
+    --importance_network_dir <importance_network_dir> \
+    --importance_network_base_model <importance_network_base_model> \
+    --importance_network_ft_type <importance_network_ft_type> \
+    --importance_network_ft_lr <importance_network_ft_lr> \
+    --importance_network_rollout_model_short <importance_network_rollout_model_short> \
+    --importance_network_rollout_task_name <importance_network_rollout_task_name> \
+    --importance_network_group_size <importance_network_group_size> \
+    --rollout_model_name <rollout_model_name> \
+    --rollout_task_name <rollout_task_name> \
+    --rollout_file_number <rollout_file_number> \
+    --rollout_group_size <rollout_group_size> \
+    --num_prompts <num_prompts> \
+    --num_pairs <num_pairs> \
+    --debug \
+```
+
+Note we're specifying the importance network directory as well as the rollout directory (from which we'll load the rollouts).
+
 
 
 ## Part 3: Applying the Soft-Mask in GRPO
 
+Use some standard GRPO pipeline, but add a soft-mask to the GRPO loss to upweight tokens with high reward-variance using the importance network (in some as-of-yet undetermined way). Number go up?
