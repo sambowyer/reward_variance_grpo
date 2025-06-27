@@ -56,23 +56,27 @@ def colorFader(c1, c2, mix=0):
 def colored(c, text):
     return f"\033[38;2;{int(c[0])};{int(c[1])};{int(c[2])}m{text} \033[0m"
 
-def render_text_heatmap_terminal(text_list, attention_list, output_file=None, color_start=[0, 255, 0], color_end=[255, 0, 0], rescale_value=False):
+def render_text_heatmap_terminal(text_list, attention_list, output_file=None, color_start=[0, 255, 0], color_end=[255, 0, 0], rescale_value=False, num_pad_end=0):
     """
     Render text heatmap using ANSI color codes for terminal output.
     Can also save to a text file with HTML-like formatting.
     """
-    assert(len(text_list) == len(attention_list))
+    assert(len(text_list) == len(attention_list) + num_pad_end)
     if rescale_value:
-        print(attention_list)
+        # print(attention_list)
         attention_list = rescale(attention_list)
-        print(attention_list)
+        # print(attention_list)
     
     normalizer = max(attention_list)
     output = ""
     
-    for word, attention in zip(text_list, attention_list):
+    for word, attention in zip(text_list[:len(attention_list)], attention_list):
         color = colorFader(color_start, color_end, mix=attention / normalizer)
         output += colored(color, word)
+
+    # add regular text to end
+    for i in range(num_pad_end):
+        output += text_list[-i-1]
     
     # Print to terminal
     print(output)

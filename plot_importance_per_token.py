@@ -59,15 +59,19 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.rollout_model_name)
 
     completions = []
+    completion_stubs = []
 
     # Group by prompt_id and completion_text_{A,B}
-    prompt_groups = rollout_data.groupby(["prompt_id", "completion_text_A", "completion_text_B"])
-    for (prompt_id, completion_text_A, completion_text_B), group in list(prompt_groups)[:args.num_prompts]:
+    prompt_groups = rollout_data.groupby(["prompt_id"])
+    for (prompt_id), group in list(prompt_groups)[:args.num_prompts]:
         # For each group_id (should be the same for all rows in this group)
         for i, row in group.head(args.num_pairs).iterrows():
+            completion_text_A = row['completion_text_A']
+            completion_text_B = row['completion_text_B']
 
             completions.append(completion_text_A)
             completions.append(completion_text_B)
+            completion_stubs.append(row['completion_stub'])
 
     completion_tokens = [tokenizer.encode(completion) for completion in completions]
     completion_tokens_str = [[tokenizer.decode(token_id) for token_id in token_ids] for token_ids in completion_tokens]
@@ -85,16 +89,24 @@ def main():
     # Apply some function to the importance scores
     # max_importance_score = np.max(importance_scores)
     # importance_scores = np.exp(importance_scores - max_importance_score)
-    importance_scores = np.log(importance_scores)
+    # importance_scores = np.log(importance_scores)
 
     # ========== Print Importance Scores ==========
     print()
     for i in range(len(completion_tokens_str)):
+        if i % (args.num_pairs*2) == 0:
+            print("#"*100 + f"\nPrompt {i//(args.num_pairs*2)}\n")
+
         if i % 2 == 0:
             print("-"*100)
-        print(f"Completion {i}\n")
+            print(f"Completion Stub {(i%(args.num_pairs*2))//(args.num_pairs)}: {completion_stubs[i//2]}\n")
+
+        print(f"Completion {i%(args.num_pairs*2)}\n")
         # render_text_heatmap_matplotlib(completion_tokens_str[i], importance_scores[i][:len(completion_tokens_str[i])], f"plots/importance_scores_{i}.pdf")
-        render_text_heatmap_terminal(completion_tokens_str[i], importance_scores[i][:len(completion_tokens_str[i])], rescale_value=True)
+        actual_score = importance_scores[i][:len(completion_tokens_str[i])]
+        actual_score = [actual_score[i+1] - actual_score[i] for i in range(len(actual_score)-1)]
+        
+        render_text_heatmap_terminal(completion_tokens_str[i], actual_score, rescale_value=True, num_pad_end=1)
 
         print()
 
