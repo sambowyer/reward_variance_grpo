@@ -36,7 +36,7 @@ class RegressionHead(nn.Module):
         return out
 
     def load_weights(self, path):
-        linear_weights = torch.load(os.path.join(path, "linear.pt"))
+        linear_weights = torch.load(os.path.join(path, "linear.pt"), weights_only=True)
         self.linear.weight.data = linear_weights['weight'].to(self.linear.weight.device)
         self.linear.bias.data = linear_weights['bias'].to(self.linear.bias.device)
         return self
@@ -165,6 +165,41 @@ def nll_loss_pair(R1, R2, m_q, v_q, f_theta):
     return -log_prob
 
 # =====================
+# Validation
+# =====================
+def validate(model, val_loader, epoch, args):
+    # Validation
+    model.eval()
+    val_loss = 0
+    with torch.no_grad():
+        for batch in tqdm(val_loader, desc=f"Epoch {epoch+1} [val]", disable=args.disable_progress_bar):
+            input_ids = batch['input_ids'].to('cuda')
+            attention_mask = batch['attention_mask'].to('cuda')
+
+            outputs = model.base_model(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
+            hidden_states = outputs.hidden_states[-1]
+            pred = model.regression_head(hidden_states, attention_mask)
+            
+            try:
+                f_theta = torch.stack([pred[i, idx-1] for i, idx in enumerate(batch['split_token_idx'])])
+            except IndexError:
+                # Can happen if len(completion_stub_tokens) != split_token_idx
+                # (WHICH SHOULD NEVER HAPPEN (!?))
+                # breakpoint()
+                continue
+            
+            loss = nll_loss_pair(batch['reward_A'].to('cuda'), batch['reward_B'].to('cuda'), batch['reward_group_mean'].to('cuda'), batch['reward_group_var'].to('cuda'), f_theta).mean()
+            
+            val_loss += loss.item() * input_ids.size(0)
+    
+    val_loss /= len(val_loader.dataset)
+
+    if not args.disable_wandb:
+        wandb.log({'val/loss': val_loss})
+
+    return val_loss
+
+# =====================
 # Main Training Script
 # =====================
 def main():
@@ -183,8 +218,8 @@ def main():
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--num_epochs', type=int, default=1)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--fine_progress_bar', action='store_true')
-    parser.add_argument('--disable_wandb', action='store_true')
+    parser.add_argument('--disable_progress_bar', action='store_true', default=False)
+    parser.add_argument('--disable_wandb', action='store_true', default=False)
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
@@ -243,12 +278,16 @@ def main():
     if not args.disable_wandb:
         wandb.init(entity="sam-bowyer-bristol", project="importance_networks", name=run_name)
 
+    # ======== Initial Validation =======
+    val_loss = validate(model, val_loader, 0, args)
+    print(f"Initial validation loss: {val_loss:.4f}")
+
     # ========== Training Loop ==========
     for epoch in range(args.num_epochs):
         model.train()
         train_loss = 0
 
-        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1} [train]", miniters=0 if args.fine_progress_bar else len(train_loader)//10):
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1} [train]", disable=args.disable_progress_bar):
             optimizer.zero_grad()
             
             input_ids = batch['input_ids'].to('cuda')
@@ -277,34 +316,8 @@ def main():
 
         train_loss /= len(train_loader.dataset)
         
-        # Validation
-        model.eval()
-        val_loss = 0
-        with torch.no_grad():
-            for batch in tqdm(val_loader, desc=f"Epoch {epoch+1} [val]", miniters=0 if args.fine_progress_bar else len(val_loader)//10):
-                input_ids = batch['input_ids'].to('cuda')
-                attention_mask = batch['attention_mask'].to('cuda')
-
-                outputs = model.base_model(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
-                hidden_states = outputs.hidden_states[-1]
-                pred = model.regression_head(hidden_states, attention_mask)
-                
-                try:
-                    f_theta = torch.stack([pred[i, idx-1] for i, idx in enumerate(batch['split_token_idx'])])
-                except IndexError:
-                    # Can happen if len(completion_stub_tokens) != split_token_idx
-                    # (WHICH SHOULD NEVER HAPPEN (!?))
-                    # breakpoint()
-                    continue
-                
-                loss = nll_loss_pair(batch['reward_A'].to('cuda'), batch['reward_B'].to('cuda'), batch['reward_group_mean'].to('cuda'), batch['reward_group_var'].to('cuda'), f_theta).mean()
-                
-                val_loss += loss.item() * input_ids.size(0)
-        
-        val_loss /= len(val_loader.dataset)
-
-        if not args.disable_wandb:
-            wandb.log({'val/loss': val_loss})
+        # ========== Validation ==========
+        val_loss = validate(model, val_loader, epoch, args)
 
         print(f"Epoch {epoch+1}: train_loss={train_loss:.4f}, val_loss={val_loss:.4f}")
 
