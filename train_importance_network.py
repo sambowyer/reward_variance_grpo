@@ -88,6 +88,11 @@ def collate_fn(batch):
     attention_mask = [item['attention_mask'] for item in batch]
     input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=0)
     attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask, batch_first=True, padding_value=0)
+    
+    # Ensure input_ids are long/int dtype for embedding layer
+    input_ids = input_ids.long()
+    attention_mask = attention_mask.long()
+    
     reward_A = torch.stack([item['reward_A'] for item in batch])
     reward_B = torch.stack([item['reward_B'] for item in batch])
     reward_group_mean = torch.stack([item['reward_group_mean'] for item in batch])
@@ -165,6 +170,9 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
+
+    finetune_type_str = args.finetune_type if args.finetune_type == 'full' else f"lora_{args.lora_rank}"
+
     # ========== Data Loading ==========
     rollout_model_short = args.rollout_model_name.split("/")[-1]
 
@@ -204,13 +212,16 @@ def main():
         lora_config = LoraConfig(task_type=TaskType.CAUSAL_LM, r=args.lora_rank, lora_alpha=16, lora_dropout=0.05, target_modules=["q_proj", "k_proj", "v_proj", "o_proj"])
         base_model = get_peft_model(base_model, lora_config)
 
+    # Enable gradient checkpointing to save memory
+    base_model.gradient_checkpointing_enable()
+
     model = ImportanceModel(base_model, regression_head).to('cuda')
 
     # ========== Optimizer ==========
     optimizer = optim.AdamW(model.parameters(), lr=args.lr)
     
     # ========== wandb ==========
-    run_name = f"{args.base_model.split('/')[-1]}_{args.finetune_type}_{rollout_model_short}_{args.rollout_task_name}"
+    run_name = f"{args.base_model.split('/')[-1]}_{finetune_type_str}_{rollout_model_short}_{args.rollout_task_name}_G{args.group_size}"
     if not args.disable_wandb:
         wandb.init(entity="sam-bowyer-bristol", project="importance_networks", name=run_name)
 
@@ -274,7 +285,6 @@ def main():
         print(f"Epoch {epoch+1}: train_loss={train_loss:.4f}, val_loss={val_loss:.4f}")
 
     # ========== Save ==========
-    finetune_type_str = args.finetune_type if args.finetune_type == 'full' else f"lora_{args.lora_rank}"
     save_dir = os.path.join(args.output_dir, args.base_model.split('/')[-1], f"rollouts_{rollout_model_short}_{args.rollout_task_name}_{finetune_type_str}")
     os.makedirs(save_dir, exist_ok=True)
 
