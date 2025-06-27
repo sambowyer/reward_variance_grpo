@@ -16,6 +16,9 @@ plots/
 # Checkpoints
 importance_networks/
 
+# LaTeX
+tex_sources/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
