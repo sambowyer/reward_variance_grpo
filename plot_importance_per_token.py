@@ -9,6 +9,22 @@ from train_importance_network import ImportanceModel
 from transformers import AutoTokenizer
 from text_heatmap import render_text_heatmap_matplotlib, render_text_heatmap_terminal
 
+from groundtruth_f_theta import get_groundtruth_f_theta
+from vllm import LLM
+
+plt.rcParams['text.usetex'] = True
+plt.style.use(['default'])
+
+# # Set font sizes
+# plt.rc('font', size=8)          # controls default text sizes
+# plt.rc('axes', titlesize=10)    # fontsize of the axes title
+# plt.rc('axes', labelsize=9)     # fontsize of the x and y labels
+# plt.rc('xtick', labelsize=7)    # fontsize of the tick labels
+# plt.rc('ytick', labelsize=7)    # fontsize of the tick labels
+# plt.rc('legend', fontsize=7)    # legend fontsize
+# plt.rc('figure', titlesize=9)   # fontsize of the figure title
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--importance_network_dir", type=str, default="importance_networks")
@@ -24,9 +40,13 @@ def main():
     parser.add_argument("--rollout_group_size", type=int, default=16)
     parser.add_argument("--num_prompts", type=int, default=3)
     parser.add_argument("--num_pairs", type=int, default=2)
+    parser.add_argument("--get_true_f_theta", action="store_true", default=False)
+    parser.add_argument("--plot_true_f_theta_comparison", action="store_true", default=False)
+    parser.add_argument("--eager", action="store_true", default=False)
     parser.add_argument("--debug", action="store_true", default=False)
     args = parser.parse_args()
 
+    # ========== Get Model Names ==========
     importance_network_base_model_short = args.importance_network_base_model.split("/")[-1]
     importance_network_rollout_model_short = args.importance_network_rollout_model_short.split("/")[-1]
     rollout_model_short = args.rollout_model_name.split("/")[-1]
@@ -58,20 +78,24 @@ def main():
     # ========== Get Completion Tokens ==========
     tokenizer = AutoTokenizer.from_pretrained(args.rollout_model_name)
 
+    prompts = []
     completions = []
     completion_stubs = []
+    group_reward_variances = []
 
     # Group by prompt_id and completion_text_{A,B}
     prompt_groups = rollout_data.groupby(["prompt_id"])
     for (prompt_id), group in list(prompt_groups)[:args.num_prompts]:
         # For each group_id (should be the same for all rows in this group)
         for i, row in group.head(args.num_pairs).iterrows():
+            prompt = row['prompt_text']
             completion_text_A = row['completion_text_A']
             completion_text_B = row['completion_text_B']
 
-            completions.append(completion_text_A)
-            completions.append(completion_text_B)
-            completion_stubs.append(row['completion_stub'])
+            prompts.extend([prompt]*2)
+            completions.extend([completion_text_A, completion_text_B])
+            completion_stubs.extend([row['completion_stub']]*2)
+            group_reward_variances.extend([row['reward_group_var']]*2)
 
     completion_tokens = [tokenizer.encode(completion) for completion in completions]
     completion_tokens_str = [[tokenizer.decode(token_id) for token_id in token_ids] for token_ids in completion_tokens]
@@ -91,6 +115,23 @@ def main():
     # importance_scores = np.exp(importance_scores - max_importance_score)
     # importance_scores = np.log(importance_scores)
 
+
+    # ======= Setup for Groundtruth f_theta =======
+    if args.get_true_f_theta:
+        print(f"Loading VLLM model for groundtruth f_theta computation...\n")
+        # Load model with VLLM
+        model = LLM(
+            model=args.rollout_model_name,
+            enable_prefix_caching=True,
+            dtype=torch.bfloat16,
+            enforce_eager=args.eager,
+        )
+
+        # Set up tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(args.rollout_model_name)
+        EOS_TOKEN_ID = tokenizer.eos_token_id
+        EOS_TOKEN = tokenizer.convert_ids_to_tokens(EOS_TOKEN_ID)
+
     # ========== Print Importance Scores ==========
     print()
     for i in range(len(completion_tokens_str)):
@@ -102,11 +143,46 @@ def main():
             print(f"Completion Stub {(i%(args.num_pairs*2))//(args.num_pairs)}: {completion_stubs[i//2]}\n")
 
         print(f"Completion {i%(args.num_pairs*2)}\n")
+
+        if args.get_true_f_theta:
+            true_f_theta = get_groundtruth_f_theta(
+                prompts[i],
+                completions[i],
+                group_reward_variances[i],
+                args.rollout_task_name,
+                model,
+                tokenizer,
+            )
+            print(f"TRUE f_theta: {true_f_theta[:len(completion_tokens_str[i])].numpy()}\n")
+
+            if args.plot_true_f_theta_comparison:
+                plt.figure(figsize=(len(completion_tokens_str[i])/4, 5))
+                plt.plot(true_f_theta[:len(completion_tokens_str[i])].numpy(), label="True f_theta")
+                plt.plot(importance_scores[i][:len(completion_tokens_str[i])], label="Importance Network f_theta")
+                plt.legend()
+
+                # breakpoint()
+
+                # put tokens on the x-axis
+                plt.xticks(
+                    range(len(completion_tokens_str[i])),
+                    [t.replace("$", "\$") for t in completion_tokens_str[i]],
+                    rotation=45
+                )
+
+                plt.tight_layout()
+
+                # plt.show()
+                plt.savefig(f"plots/true_f_theta_comparison_{i}.png")
+                plt.close()
+        
+        print(f"f_theta: {importance_scores[i][:len(completion_tokens_str[i])]}\n")
+
         # render_text_heatmap_matplotlib(completion_tokens_str[i], importance_scores[i][:len(completion_tokens_str[i])], f"plots/importance_scores_{i}.pdf")
         actual_score = importance_scores[i][:len(completion_tokens_str[i])]
         actual_score = [actual_score[i+1] - actual_score[i] for i in range(len(actual_score)-1)]
         
-        render_text_heatmap_terminal(completion_tokens_str[i], actual_score, rescale_value=True, num_pad_end=1)
+        render_text_heatmap_terminal(completion_tokens_str[i], actual_score, rescale_value=False, num_pad_end=1)
 
         print()
 

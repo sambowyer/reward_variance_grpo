@@ -172,7 +172,7 @@ def validate(model, val_loader, epoch, args):
     model.eval()
     val_loss = 0
     with torch.no_grad():
-        for batch in tqdm(val_loader, desc=f"Epoch {epoch+1} [val]", disable=args.disable_progress_bar):
+        for batch in tqdm(val_loader, desc=f"Epoch {epoch+1} [val]", disable=args.disable_progress_bar, leave=False):
             input_ids = batch['input_ids'].to('cuda')
             attention_mask = batch['attention_mask'].to('cuda')
 
@@ -186,6 +186,11 @@ def validate(model, val_loader, epoch, args):
                 # Can happen if len(completion_stub_tokens) != split_token_idx
                 # (WHICH SHOULD NEVER HAPPEN (!?))
                 # breakpoint()
+
+                # free memory
+                del input_ids, attention_mask, pred
+                torch.cuda.empty_cache()
+
                 continue
             
             loss = nll_loss_pair(batch['reward_A'].to('cuda'), batch['reward_B'].to('cuda'), batch['reward_group_mean'].to('cuda'), batch['reward_group_var'].to('cuda'), f_theta).mean()
@@ -287,7 +292,7 @@ def main():
         model.train()
         train_loss = 0
 
-        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1} [train]", disable=args.disable_progress_bar):
+        for batch in tqdm(train_loader, desc=f"Epoch {epoch+1} [train]", disable=args.disable_progress_bar, leave=False):
             optimizer.zero_grad()
             
             input_ids = batch['input_ids'].to('cuda')
@@ -302,6 +307,10 @@ def main():
                 # Can happen if len(completion_stub_tokens) != split_token_idx
                 # (WHICH SHOULD NEVER HAPPEN (!?))
                 # breakpoint()
+
+                # free memory
+                del input_ids, attention_mask, pred
+                torch.cuda.empty_cache()
                 continue
             
             loss = nll_loss_pair(batch['reward_A'].to('cuda'), batch['reward_B'].to('cuda'), batch['reward_group_mean'].to('cuda'), batch['reward_group_var'].to('cuda'), f_theta).mean()
